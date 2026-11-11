@@ -82,10 +82,7 @@ def plans_menu():
 
 
 @dp.message(CommandStart())
-async def start(message: Message):
-    await message.answer(
-        "🇩🇪 <b>Belov | VPN</b>\n\n"
-        "Добро пожаловать! Выберите действие.",
+async def start(message: Message)
         reply_markup=main_menu()
     )
 
