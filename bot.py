@@ -22,7 +22,7 @@ PLANS = {
 }
 
 logging.basicConfig(level=logging.INFO)
-db = sqlite3.connect(DB_PATH)
+db = sqlite3.connect(DB_PATH, check_same_thread=False)
 db.execute("""CREATE TABLE IF NOT EXISTS orders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -41,6 +41,7 @@ db.commit()
 
 dp = Dispatcher()
 
+
 def main_menu():
     kb = InlineKeyboardBuilder()
     kb.button(text="🛍 Купить VPN", callback_data="buy")
@@ -50,6 +51,7 @@ def main_menu():
     kb.adjust(2, 2)
     return kb.as_markup()
 
+
 def plans_menu():
     kb = InlineKeyboardBuilder()
     for key, (label, price) in PLANS.items():
@@ -58,6 +60,7 @@ def plans_menu():
     kb.adjust(1)
     return kb.as_markup()
 
+
 def contact_admin_menu():
     kb = InlineKeyboardBuilder()
     if SUPPORT_USERNAME:
@@ -65,6 +68,7 @@ def contact_admin_menu():
     kb.button(text="⬅️ В главное меню", callback_data="home")
     kb.adjust(1)
     return kb.as_markup()
+
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -76,15 +80,18 @@ async def start(message: Message):
         parse_mode="HTML"
     )
 
+
 @dp.callback_query(F.data == "home")
 async def home(call: CallbackQuery):
     await call.message.edit_text("🇩🇪 <b>Belov | VPN</b>\nВыберите действие:", reply_markup=main_menu(), parse_mode="HTML")
     await call.answer()
 
+
 @dp.callback_query(F.data == "buy")
 async def buy(call: CallbackQuery):
     await call.message.edit_text("Выберите тариф:", reply_markup=plans_menu())
     await call.answer()
+
 
 @dp.callback_query(F.data.startswith("plan:"))
 async def choose_plan(call: CallbackQuery, bot: Bot):
@@ -116,10 +123,11 @@ async def choose_plan(call: CallbackQuery, bot: Bot):
             ADMIN_ID,
             f"🆕 Заказ №{order_id}\nПользователь: {call.from_user.full_name} ({username})\n"
             f"Telegram ID: <code>{call.from_user.id}</code>\nТариф: {label}\nСумма: {price} ₽\n"
-            f"Выдать после проверки оплаты: /give {call.from_user.id} {days} <VLESS_ССЫЛКА>",
+            f"Выдать после проверки оплаты: /give {call.from_user.id} {days} {order_id} <VLESS_ССЫЛКА>",
             parse_mode="HTML"
         )
     await call.answer("Заказ создан")
+
 
 @dp.callback_query(F.data == "myvpn")
 async def myvpn(call: CallbackQuery):
@@ -130,6 +138,7 @@ async def myvpn(call: CallbackQuery):
         text = f"🔑 Ваша ссылка:\n<code>{row[0]}</code>\n\nДействует до: {row[1]}"
     await call.message.answer(text, parse_mode="HTML")
     await call.answer()
+
 
 @dp.callback_query(F.data == "orders")
 async def orders(call: CallbackQuery):
@@ -147,11 +156,13 @@ async def orders(call: CallbackQuery):
     await call.message.answer(text, parse_mode="HTML")
     await call.answer()
 
+
 @dp.callback_query(F.data == "support")
 async def support(call: CallbackQuery):
     text = f"По вопросам заказа напишите @{SUPPORT_USERNAME}." if SUPPORT_USERNAME else "По вопросам заказа свяжитесь с администратором."
     await call.message.answer(text, reply_markup=contact_admin_menu())
     await call.answer()
+
 
 @dp.message(Command("reply"))
 async def reply_to_customer(message: Message, bot: Bot):
@@ -167,7 +178,7 @@ async def reply_to_customer(message: Message, bot: Bot):
         reply_text = parts[2].strip()
         if not reply_text:
             raise ValueError()
-        await bot.send_message(user_id, "💬 <b>Сообщение от администратора Belov VPN:</b>\\n\\n" + html.escape(reply_text), parse_mode="HTML")
+        await bot.send_message(user_id, "💬 <b>Сообщение от администратора Belov VPN:</b>\n\n" + html.escape(reply_text), parse_mode="HTML")
         await message.answer("✅ Сообщение отправлено покупателю.")
     except ValueError:
         await message.answer("Проверьте USER_ID и текст сообщения.")
@@ -175,37 +186,78 @@ async def reply_to_customer(message: Message, bot: Bot):
         logging.exception("Не удалось отправить ответ покупателю")
         await message.answer(f"Не удалось отправить сообщение: {e}")
 
+
 @dp.message(Command("give"))
 async def give_access(message: Message):
+    """Формат: /give USER_ID ДНЕЙ ORDER_ID VLESS_ССЫЛКА"""
     if message.from_user.id != ADMIN_ID:
         return
-    parts = message.text.split(maxsplit=3)
-    if len(parts) != 4:
-        await message.answer("Формат: /give USER_ID ДНЕЙ VLESS_ССЫЛКА")
+    parts = message.text.split(maxsplit=4)
+    if len(parts) != 5:
+        await message.answer("Формат: /give USER_ID ДНЕЙ ORDER_ID VLESS_ССЫЛКА")
         return
     try:
-        user_id, days = int(parts[1]), int(parts[2])
-        link = parts[3].strip()
-        if days not in (30, 90, 180) or not link.startswith(("vless://", "https://")):
-            raise ValueError()
-        expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-        db.execute(
-            "INSERT INTO access(user_id, vpn_link, expires_at) VALUES(?,?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET vpn_link=excluded.vpn_link, expires_at=excluded.expires_at",
-            (user_id, link, expires)
-        )
-        db.execute("UPDATE orders SET status='approved' WHERE user_id=? AND status='pending'", (user_id,))
-        db.commit()
-        await message.bot.send_message(user_id, f"✅ Доступ выдан на {days} дней!\n\nВаша ссылка:\n<code>{link}</code>\n\nДействует до: {expires}", parse_mode="HTML")
-        await message.answer("Доступ отправлен пользователю.")
+        user_id = int(parts[1])
+        days = int(parts[2])
+        order_id = int(parts[3])
+        link = parts[4].strip()
     except ValueError:
-        await message.answer("Проверьте USER_ID, срок (30/90/180) и ссылку.")
+        await message.answer("USER_ID, ДНЕЙ и ORDER_ID должны быть числами.")
+        return
+
+    if days not in (30, 90, 180):
+        await message.answer("Срок должен быть 30, 90 или 180 дней.")
+        return
+    if not link.startswith(("vless://", "https://")):
+        await message.answer("Ссылка должна начинаться с vless:// или https://")
+        return
+
+    # Проверяем, что заказ принадлежит этому пользователю и ещё не выдан
+    row = db.execute("SELECT status FROM orders WHERE id=? AND user_id=?", (order_id, user_id)).fetchone()
+    if not row:
+        await message.answer("Заказ с таким ID не найден у этого пользователя.")
+        return
+    if row[0] == "approved":
+        await message.answer("Этот заказ уже был выдан.")
+        return
+
+    now = datetime.now(timezone.utc)
+    existing = db.execute("SELECT expires_at FROM access WHERE user_id=?", (user_id,)).fetchone()
+
+    # Продлеваем срок, если есть активный доступ, иначе считаем от текущего момента
+    if existing:
+        try:
+            current_expires = datetime.fromisoformat(existing[0])
+        except ValueError:
+            current_expires = now
+        base = current_expires if current_expires > now else now
+        expires = (base + timedelta(days=days)).isoformat()
+    else:
+        expires = (now + timedelta(days=days)).isoformat()
+
+    db.execute(
+        "INSERT INTO access(user_id, vpn_link, expires_at) VALUES(?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET vpn_link=excluded.vpn_link, expires_at=excluded.expires_at",
+        (user_id, link, expires)
+    )
+    db.execute("UPDATE orders SET status='approved' WHERE id=? AND user_id=?", (order_id, user_id))
+    db.commit()
+
+    await message.bot.send_message(
+        user_id,
+        f"✅ Доступ выдан на {days} дней!\n\nВаша ссылка:\n<code>{link}</code>\n\nДействует до: {expires}",
+        parse_mode="HTML"
+    )
+    await message.answer(f"Доступ по заказу №{order_id} отправлен пользователю.")
+
 
 @dp.message(Command("pending"))
 async def pending(message: Message):
     if message.from_user.id != ADMIN_ID:
         return
-    rows = db.execute("SELECT id,user_id,plan_days,amount,created_at FROM orders WHERE status='pending' ORDER BY id DESC LIMIT 20").fetchall()
+    rows = db.execute(
+        "SELECT id,user_id,plan_days,amount,created_at FROM orders WHERE status='pending' ORDER BY id DESC LIMIT 20"
+    ).fetchall()
     if not rows:
         await message.answer("Ожидающих заказов нет.")
         return
@@ -214,11 +266,12 @@ async def pending(message: Message):
         lines.append(f"№{r[0]} · user {r[1]} · {r[2]} дней · {r[3]} ₽ · {r[4]}")
     await message.answer("\n".join(lines))
 
+
 @dp.message()
 async def customer_message(message: Message, bot: Bot):
     """Сообщения покупателей передаются администратору."""
     if message.from_user.id == ADMIN_ID:
-        await message.answer("Чтобы написать покупателю, используй команду:\\n/reply USER_ID текст сообщения")
+        await message.answer("Чтобы написать покупателю, используй команду:\n/reply USER_ID текст сообщения")
         return
     if not ADMIN_ID:
         return
@@ -226,11 +279,11 @@ async def customer_message(message: Message, bot: Bot):
     user = message.from_user
     username = f"@{user.username}" if user.username else "нет username"
     header = (
-        "📩 <b>Сообщение от покупателя</b>\\n"
-        f"Имя: {html.escape(user.full_name)}\\n"
-        f"Username: {html.escape(username)}\\n"
-        f"Telegram ID: <code>{user.id}</code>\\n\\n"
-        "Чтобы ответить, отправьте команду:\\n"
+        "📩 <b>Сообщение от покупателя</b>\n"
+        f"Имя: {html.escape(user.full_name)}\n"
+        f"Username: {html.escape(username)}\n"
+        f"Telegram ID: <code>{user.id}</code>\n\n"
+        "Чтобы ответить, отправьте команду:\n"
         f"<code>/reply {user.id} ваш текст</code>"
     )
     await bot.send_message(ADMIN_ID, header, parse_mode="HTML")
@@ -248,6 +301,6 @@ async def main():
     bot = Bot(BOT_TOKEN)
     await dp.start_polling(bot)
 
+
 if __name__ == "__main__":
     asyncio.run(main())
-
