@@ -651,14 +651,18 @@ async def customer_message(message: Message, bot: Bot):
     except Exception:
         logging.exception("Не удалось передать сообщение администратору")
         await message.answer("Не получилось отправить сообщение. Попробуйте ещё раз позже.")
-
-
 async def main():
     if not BOT_TOKEN or not ADMIN_ID:
-        raise RuntimeError("Заполните BOT_TOKEN и ADMIN_ID в переменных окружения.")
+        raise RuntimeError("Заполните BOT_TOKEN и ADMIN_ID.")
+
     bot = Bot(BOT_TOKEN)
+
+    # Отключаем Webhook перед запуском Polling
+    await bot.delete_webhook(drop_pending_updates=True)
+
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
